@@ -1,9 +1,9 @@
 // From:
 // https://github.com/zed-industries/zed/blob/56daba28d40301ee4c05546fadb691d070b7b2b6/crates/gpui/examples/window_shadow.rs
 use gpui::{
-    AnyElement, App, CursorStyle, Decorations, Edges, Hsla, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement, Pixels, Point, RenderOnce, ResizeEdge, Size,
-    Styled as _, Tiling, Window, div, point, prelude::FluentBuilder as _, px,
+    AnyElement, App, CursorStyle, Decorations, Edges, Hsla, InteractiveElement as _, IntoElement,
+    MouseButton, ParentElement, Pixels, Point, RenderOnce, ResizeEdge, Size, Styled as _, Tiling,
+    Window, div, point, prelude::FluentBuilder as _, px,
 };
 
 use crate::ActiveTheme;
@@ -112,6 +112,9 @@ impl RenderOnce for WindowBorder {
             _ => self.shadow_size,
         };
         let resize_hit_size = self.resize_hit_size;
+        // A zero shadow size means a fully chromeless window: the content owns
+        // every pixel, so no frame border, corner rounding, or shadow either.
+        let chromeless = self.shadow_size == px(0.0);
         if matches!(decorations, Decorations::Client { .. }) {
             window.set_client_inset(platform_inset);
         }
@@ -127,10 +130,10 @@ impl RenderOnce for WindowBorder {
                     .flex_col()
                     .overflow_hidden()
                     .bg(gpui::transparent_black())
-                    .when(!(tiling.top || tiling.right), |div| {
+                    .when(!(tiling.top || tiling.right) && !chromeless, |div| {
                         div.rounded_tr(BORDER_RADIUS)
                     })
-                    .when(!(tiling.top || tiling.left), |div| {
+                    .when(!(tiling.top || tiling.left) && !chromeless, |div| {
                         div.rounded_tl(BORDER_RADIUS)
                     })
                     .when(!tiling.top, |div| div.pt(visual_shadow))
@@ -165,17 +168,21 @@ impl RenderOnce for WindowBorder {
                             .min_h_0()
                             .min_w_0()
                             .overflow_hidden()
-                            .when(!(tiling.top || tiling.right), |div| {
+                            .when(!(tiling.top || tiling.right) && !chromeless, |div| {
                                 div.rounded_tr(BORDER_RADIUS)
                             })
-                            .when(!(tiling.top || tiling.left), |div| {
+                            .when(!(tiling.top || tiling.left) && !chromeless, |div| {
                                 div.rounded_tl(BORDER_RADIUS)
                             })
                             .border_color(cx.theme().window_border)
-                            .when(!tiling.top, |div| div.border_t(BORDER_SIZE))
-                            .when(!tiling.bottom, |div| div.border_b(BORDER_SIZE))
-                            .when(!tiling.left, |div| div.border_l(BORDER_SIZE))
-                            .when(!tiling.right, |div| div.border_r(BORDER_SIZE))
+                            .when(!tiling.top && !chromeless, |div| div.border_t(BORDER_SIZE))
+                            .when(!tiling.bottom && !chromeless, |div| {
+                                div.border_b(BORDER_SIZE)
+                            })
+                            .when(!tiling.left && !chromeless, |div| div.border_l(BORDER_SIZE))
+                            .when(!tiling.right && !chromeless, |div| {
+                                div.border_r(BORDER_SIZE)
+                            })
                             .when(!tiling.is_tiled() && visual_shadow > px(0.), |div| {
                                 div.shadow(vec![gpui::BoxShadow {
                                     color: Hsla {
@@ -197,25 +204,17 @@ impl RenderOnce for WindowBorder {
                     .bg(gpui::transparent_black())
                     .children(self.children),
             )
-            .when(
-                matches!(decorations, Decorations::Client { .. }),
-                |this| {
-                    let Decorations::Client { tiling, .. } = decorations else {
-                        return this;
-                    };
-                    this.child(
-                        div()
-                            .absolute()
-                            .size_full()
-                            .children(resize_hit_zones(
-                                window_size,
-                                platform_inset,
-                                resize_hit_size,
-                                &tiling,
-                            )),
-                    )
-                },
-            )
+            .when(matches!(decorations, Decorations::Client { .. }), |this| {
+                let Decorations::Client { tiling, .. } = decorations else {
+                    return this;
+                };
+                this.child(div().absolute().size_full().children(resize_hit_zones(
+                    window_size,
+                    platform_inset,
+                    resize_hit_size,
+                    &tiling,
+                )))
+            })
     }
 }
 
