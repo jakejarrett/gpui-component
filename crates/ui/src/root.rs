@@ -535,7 +535,12 @@ impl Render for Root {
                 .relative()
                 .size_full()
                 .font_family(cx.theme().font_family.clone())
-                .bg(cx.theme().background)
+                // A transparent or blurred window must stay see-through, so only an
+                // opaque window gets the theme background fill behind its content.
+                .when(
+                    window.background_appearance() == gpui::WindowBackgroundAppearance::Opaque,
+                    |this| this.bg(cx.theme().background),
+                )
                 .text_color(cx.theme().foreground)
                 .refine_style(&self.style)
                 .child(TextSelectionController)
