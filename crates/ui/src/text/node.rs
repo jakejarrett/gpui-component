@@ -19,7 +19,7 @@ use crate::{
     highlighter::{HighlightTheme, LanguageRegistry, SyntaxHighlighter},
     input::{InputEdit, Point, RopeExt as _},
     text::{
-        CodeBlockActionsFn,
+        CodeBlockActionsFn, LinkClickFn,
         document::NodeRenderOptions,
         inline::{Inline, InlineState},
     },
@@ -752,6 +752,7 @@ pub(crate) struct NodeContext {
     pub(crate) link_refs: HashMap<SharedString, LinkMark>,
     pub(crate) style: TextViewStyle,
     pub(crate) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
+    pub(crate) on_link_click: Option<Arc<LinkClickFn>>,
 }
 
 impl NodeContext {
@@ -812,6 +813,7 @@ impl Paragraph {
                         .when_some(image.width, |this, width| this.w(width))
                         .when_some(image.link.clone(), |this, link| {
                             let title = image.title();
+                            let on_link_click = node_cx.on_link_click.clone();
                             this.cursor_pointer()
                                 .tooltip(move |window, cx| {
                                     Tooltip::new(title.clone()).build(window, cx)
@@ -819,7 +821,12 @@ impl Paragraph {
                                 .on_click(move |_, window, cx| {
                                     window.end_text_selection(cx);
                                     cx.stop_propagation();
-                                    cx.open_url(&link.url);
+                                    let handled = on_link_click
+                                        .as_ref()
+                                        .is_some_and(|hook| hook(&link.url, window, cx));
+                                    if !handled {
+                                        cx.open_url(&link.url);
+                                    }
                                 })
                         })
                         .into_any_element(),

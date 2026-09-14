@@ -457,7 +457,13 @@ impl Element for Inline {
                     {
                         window.end_text_selection(cx);
                         cx.stop_propagation();
-                        cx.open_url(&link.url);
+                        let hook = text_view_state
+                            .as_ref()
+                            .and_then(|state| state.read(cx).on_link_click.clone());
+                        let handled = hook.is_some_and(|hook| hook(&link.url, window, cx));
+                        if !handled {
+                            cx.open_url(&link.url);
+                        }
                     }
                 }
             });

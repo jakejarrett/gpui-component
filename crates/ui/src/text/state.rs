@@ -14,7 +14,7 @@ use crate::{
     input::{self, SelectAll},
     scroll::AutoScroll,
     text::{
-        CodeBlockActionsFn, TextViewStyle,
+        CodeBlockActionsFn, LinkClickFn, TextViewStyle,
         document::ParsedDocument,
         format,
         node::{self, NodeContext},
@@ -58,6 +58,7 @@ pub struct TextViewState {
     pub(super) scrollable: bool,
     pub(super) text_view_style: TextViewStyle,
     pub(super) code_block_actions: Option<std::sync::Arc<CodeBlockActionsFn>>,
+    pub(super) on_link_click: Option<std::sync::Arc<LinkClickFn>>,
 
     pub(super) is_selecting: bool,
     multi_click_selection: Option<TextViewMultiClickSelection>,
@@ -130,6 +131,7 @@ impl TextViewState {
             list_state: ListState::new(0, gpui::ListAlignment::Top, px(1000.)),
             text_view_style: TextViewStyle::default(),
             code_block_actions: None,
+            on_link_click: None,
             is_selecting: false,
             auto_scroll: AutoScroll::default(),
             parsed_content: Default::default(),
@@ -379,6 +381,7 @@ impl Render for TextViewState {
         let mut node_cx = self.parsed_content.node_cx.clone();
 
         node_cx.code_block_actions = self.code_block_actions.clone();
+        node_cx.on_link_click = self.on_link_click.clone();
         node_cx.style = self.text_view_style.clone();
 
         v_flex()

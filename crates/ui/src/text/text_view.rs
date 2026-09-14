@@ -18,6 +18,12 @@ use crate::{global_state::GlobalState, text::TextViewStyle};
 pub(crate) type CodeBlockActionsFn =
     dyn Fn(&CodeBlock, &mut Window, &mut App) -> AnyElement + Send + Sync;
 
+/// Type for the link click hook, see [`TextView::on_link_click`].
+///
+/// Receives the link URL; return `true` to mark the click handled, `false`
+/// to fall through to the default `cx.open_url`.
+pub(crate) type LinkClickFn = dyn Fn(&str, &mut Window, &mut App) -> bool + Send + Sync;
+
 /// A text view that can render Markdown or HTML.
 ///
 /// ## Goals
@@ -45,6 +51,7 @@ pub struct TextView {
     selectable: bool,
     scrollable: bool,
     code_block_actions: Option<Arc<CodeBlockActionsFn>>,
+    on_link_click: Option<Arc<LinkClickFn>>,
 }
 
 impl Styled for TextView {
@@ -66,6 +73,7 @@ impl TextView {
             selectable: false,
             scrollable: false,
             code_block_actions: None,
+            on_link_click: None,
         }
     }
 
@@ -81,6 +89,7 @@ impl TextView {
             selectable: false,
             scrollable: false,
             code_block_actions: None,
+            on_link_click: None,
         }
     }
 
@@ -96,6 +105,7 @@ impl TextView {
             selectable: false,
             scrollable: false,
             code_block_actions: None,
+            on_link_click: None,
         }
     }
 
@@ -125,6 +135,20 @@ impl TextView {
     /// This mode is suitable for small content, such as a few lines of text, a label, etc.
     pub fn scrollable(mut self, scrollable: bool) -> Self {
         self.scrollable = scrollable;
+        self
+    }
+
+    /// Intercept link clicks.
+    ///
+    /// The closure receives the link URL and returns `true` when it handled
+    /// the click. Returning `false` falls through to the default behaviour,
+    /// which hands the URL to the platform via [`App::open_url`]. Use this
+    /// for in-app schemes (`myapp://…`) that the OS must never see.
+    pub fn on_link_click<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&str, &mut Window, &mut App) -> bool + Send + Sync + 'static,
+    {
+        self.on_link_click = Some(Arc::new(f));
         self
     }
 
@@ -199,6 +223,7 @@ impl Element for TextView {
 
         state.update(cx, |state, cx| {
             state.code_block_actions = self.code_block_actions.clone();
+            state.on_link_click = self.on_link_click.clone();
             state.selectable = self.selectable;
             state.scrollable = self.scrollable;
             state.text_view_style = self.text_view_style.clone();
