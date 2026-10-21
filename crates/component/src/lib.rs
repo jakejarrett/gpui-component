@@ -114,6 +114,7 @@ pub use resizable::{
     ResizablePanel, ResizablePanelEvent, ResizablePanelGroup, ResizableState, h_resizable,
     resizable_panel, resize_handle, resize_handle_appearance, v_resizable,
 };
+pub use root::RootExt;
 pub use styled::*;
 pub use theme::*;
 pub use time::{calendar, date_picker, time_field};

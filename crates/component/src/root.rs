@@ -38,6 +38,9 @@ pub(crate) struct WindowState {
     touch_selection_overlay: Entity<WindowTouchSelectionOverlay>,
     sheet_size: Option<DefiniteLength>,
     pending_focus_restore: Option<WeakFocusHandle>,
+    /// Overrides the client-side decoration shadow; see
+    /// [`RootExt::window_shadow_size`].
+    pub(crate) window_shadow_size: Option<Pixels>,
     /// Source of stable dialog identities, including their rendered subtrees.
     next_dialog_id: usize,
 }
@@ -116,6 +119,7 @@ impl WindowState {
             touch_selection_overlay: cx.new(|cx| WindowTouchSelectionOverlay::new(window, cx)),
             sheet_size: None,
             pending_focus_restore: None,
+            window_shadow_size: None,
             next_dialog_id: 0,
         }
     }
@@ -696,6 +700,23 @@ impl WindowState {
     }
 }
 
+/// Window options a [`gpui_base::Root`] carries for this crate's window state.
+pub trait RootExt {
+    /// Sets the shadow ring drawn around the window with Linux client-side
+    /// decorations. Zero makes the window fully chromeless: no shadow and no
+    /// frame border. See [`crate::WindowBorder::shadow_size`].
+    fn window_shadow_size(self, size: Pixels, cx: &mut App) -> Self;
+}
+
+impl RootExt for gpui_base::Root {
+    fn window_shadow_size(self, size: Pixels, cx: &mut App) -> Self {
+        if let Some(state) = self.plugin::<WindowState>() {
+            state.update(cx, |state, _| state.window_shadow_size = Some(size));
+        }
+        self
+    }
+}
+
 impl gpui_base::RootPlugin for WindowState {
     fn prepare(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dismiss_removed_tooltip(window, cx);
@@ -703,14 +724,19 @@ impl gpui_base::RootPlugin for WindowState {
         TextSelection::activate_scope(self.active_text_selection_scope(), window, cx);
     }
 
-    fn style(&self, surface: &mut gpui::Stateful<gpui::Div>, _window: &mut Window, cx: &mut App) {
+    fn style(&self, surface: &mut gpui::Stateful<gpui::Div>, window: &mut Window, cx: &mut App) {
         use gpui::Refineable as _;
-        surface.style().refine(
-            &gpui::StyleRefinement::default()
-                .font_family(cx.theme().font_family.clone())
-                .bg(cx.theme().tokens.background)
-                .text_color(cx.theme().foreground),
-        );
+        let style = gpui::StyleRefinement::default()
+            .font_family(cx.theme().font_family.clone())
+            .text_color(cx.theme().foreground);
+        // A transparent or blurred window shows what is behind it; an opaque
+        // theme fill across the whole root would hide that.
+        let style = if window.background_appearance() == gpui::WindowBackgroundAppearance::Opaque {
+            style.bg(cx.theme().tokens.background)
+        } else {
+            style
+        };
+        surface.style().refine(&style);
     }
 
     fn decorate(
@@ -720,7 +746,11 @@ impl gpui_base::RootPlugin for WindowState {
         _window: &mut Window,
         _cx: &mut App,
     ) -> impl IntoElement {
-        window_border().child(surface)
+        window_border()
+            .when_some(self.window_shadow_size, |border, size| {
+                border.shadow_size(size)
+            })
+            .child(surface)
     }
 }
 

@@ -51,6 +51,9 @@ impl WindowBorder {
 
     /// Set the shadow size for typical Linux client-side decorations.
     ///
+    /// Zero makes the window fully chromeless: no shadow and no frame border,
+    /// so the content owns every pixel of the surface.
+    ///
     /// Default: [`SHADOW_SIZE`]
     pub fn shadow_size(mut self, size: impl Into<Pixels>) -> Self {
         self.shadow_size = size.into();
@@ -151,6 +154,7 @@ impl RenderOnce for WindowBorder {
         } else {
             self.shadow_size
         };
+        let chromeless = self.shadow_size == px(0.0);
         let resize_hit_size = self.resize_hit_size;
         window.set_client_inset(platform_inset);
         let window_size = window.window_bounds().get_bounds().size;
@@ -221,11 +225,15 @@ impl RenderOnce for WindowBorder {
                         div.rounded_tl(BORDER_RADIUS)
                     })
                     .border_color(border_color)
-                    .when(!tiling.top, |div| div.border_t(BORDER_SIZE))
-                    .when(!tiling.bottom, |div| div.border_b(BORDER_SIZE))
-                    .when(!tiling.left, |div| div.border_l(BORDER_SIZE))
-                    .when(!tiling.right, |div| div.border_r(BORDER_SIZE))
-                    .when(!tiling.is_tiled(), |div| {
+                    .when(!tiling.top && !chromeless, |div| div.border_t(BORDER_SIZE))
+                    .when(!tiling.bottom && !chromeless, |div| {
+                        div.border_b(BORDER_SIZE)
+                    })
+                    .when(!tiling.left && !chromeless, |div| div.border_l(BORDER_SIZE))
+                    .when(!tiling.right && !chromeless, |div| {
+                        div.border_r(BORDER_SIZE)
+                    })
+                    .when(!tiling.is_tiled() && !chromeless, |div| {
                         let opacity = if is_window_active { 1.0 } else { 0.7 };
                         div.shadow(vec![
                             // Keep the effective outer reach below SHADOW_SIZE. GPUI
