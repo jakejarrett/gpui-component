@@ -62,18 +62,18 @@ story = { path = "crates/story" }
 # GPUI comes from Auru's fork of Zed (github.com/jakejarrett/zed), pinned to
 # the same revision the Auru app pins, so both resolve to one gpui. Upstream
 # gpui-kit takes the `gpui-pre-*` snapshots from crates.io instead.
-gpui = { git = "https://github.com/jakejarrett/zed", rev = "4dc7695757b97d3c35fe11a4a7f30f2a44b6f774" }
-gpui_platform = { git = "https://github.com/jakejarrett/zed", rev = "4dc7695757b97d3c35fe11a4a7f30f2a44b6f774", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui_web = { git = "https://github.com/jakejarrett/zed", rev = "4dc7695757b97d3c35fe11a4a7f30f2a44b6f774" }
+gpui = { git = "https://github.com/jakejarrett/zed", rev = "0cc5ccdb4745f8d5a484080aad388961466e6a0a" }
+gpui_platform = { git = "https://github.com/jakejarrett/zed", rev = "0cc5ccdb4745f8d5a484080aad388961466e6a0a", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui_web = { git = "https://github.com/jakejarrett/zed", rev = "0cc5ccdb4745f8d5a484080aad388961466e6a0a" }
 # Fast is optional; existing crates select it through their gpui-fast feature.
 # Explicit package fields make Cargo use these dependency keys as Rust crate names;
 # the packages declare the same library names as the pre backend.
 gpui-fast = { package = "gpui-fast", version = "0.1.10", features = ["windows-manifest-provided-by-host"] }
 gpui-fast-platform = { package = "gpui-fast-platform", version = "0.1.10", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui-fast-web = { package = "gpui-fast-web", version = "0.1.10" }
-gpui_macros = { git = "https://github.com/jakejarrett/zed", rev = "4dc7695757b97d3c35fe11a4a7f30f2a44b6f774" }
-reqwest_client = { git = "https://github.com/jakejarrett/zed", rev = "4dc7695757b97d3c35fe11a4a7f30f2a44b6f774" }
-sum-tree = { git = "https://github.com/jakejarrett/zed", rev = "4dc7695757b97d3c35fe11a4a7f30f2a44b6f774", package = "sum_tree" }
+gpui_macros = { git = "https://github.com/jakejarrett/zed", rev = "0cc5ccdb4745f8d5a484080aad388961466e6a0a" }
+reqwest_client = { git = "https://github.com/jakejarrett/zed", rev = "0cc5ccdb4745f8d5a484080aad388961466e6a0a" }
+sum-tree = { git = "https://github.com/jakejarrett/zed", rev = "0cc5ccdb4745f8d5a484080aad388961466e6a0a", package = "sum_tree" }
 reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "33bc764aa15ff7b200bf7c93bd96e24878d53e14", default-features = false, features = [
     "charset",
     "http2",
