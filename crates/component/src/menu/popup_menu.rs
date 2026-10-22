@@ -2,6 +2,9 @@ use crate::ThemeStyled as _;
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
 use crate::actions::{SelectLeft, SelectRight};
 use crate::menu::menu_item::MenuItemElement;
+use crate::menu::native_popup::{
+    NativeMenuHost, NativeMenuPlacement, bounds_probe, close_native_menu, open_native_menu,
+};
 use crate::scroll::ScrollableElement;
 use crate::{ActiveTheme, ElementExt, Icon, IconName, Sizable as _, h_flex, v_flex};
 use crate::{Side, Size, kbd::Kbd};
@@ -11,7 +14,11 @@ use gpui::{
     ParentElement, Pixels, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement,
     Styled, WeakEntity, Window, anchored, deferred, div, prelude::FluentBuilder, px, rems,
 };
-use gpui::{ClickEvent, Half, Hsla, MouseDownEvent, OwnedMenuItem, Point, Subscription};
+use gpui::{
+    AnyWindowHandle, ClickEvent, Half, Hsla, MouseDownEvent, OwnedMenuItem, Point, Subscription,
+    WindowHandle,
+    popup::{PopupAnchor, PopupConstraintAdjustment, PopupGravity},
+};
 use gpui_base::TestSupportExt as _;
 
 use std::rc::Rc;
@@ -243,7 +250,7 @@ impl PopupMenuItem {
     }
 
     #[inline]
-    fn is_separator(&self) -> bool {
+    pub(super) fn is_separator(&self) -> bool {
         matches!(self, PopupMenuItem::Separator)
     }
 
@@ -279,6 +286,29 @@ impl PopupMenuItem {
     }
 }
 
+/// A menu shown in a native popup window.
+pub(super) struct NativeMenuState {
+    /// The window the menu's actions go to: the one the menu was opened from,
+    /// whose focus path the actions would have bubbled through in-window.
+    pub(super) root_window: AnyWindowHandle,
+    /// The open submenu's item and window.
+    submenu: Option<(usize, WindowHandle<NativeMenuHost>)>,
+    /// The submenu item whose submenu stays closed until the selection moves:
+    /// reached by arrow keys, which would otherwise be pulled into it, or
+    /// left with the left arrow.
+    submenu_held: Option<usize>,
+}
+
+impl NativeMenuState {
+    pub(super) fn new(root_window: AnyWindowHandle) -> Self {
+        Self {
+            root_window,
+            submenu: None,
+            submenu_held: None,
+        }
+    }
+}
+
 pub struct PopupMenu {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) menu_items: Vec<PopupMenuItem>,
@@ -308,6 +338,11 @@ pub struct PopupMenu {
     scroll_handle: ScrollHandle,
     /// Fill in place of the theme's `popover`, submenus included.
     background: Option<Hsla>,
+    /// Set while the menu is in a window of its own rather than drawn in its
+    /// parent's (see `native_popup`).
+    pub(super) native: Option<NativeMenuState>,
+    /// Where each submenu item was laid out, to anchor a native submenu to.
+    submenu_item_bounds: Vec<(usize, Bounds<Pixels>)>,
     // This will update on render
     submenu_anchor: (Anchor, Pixels),
 
@@ -350,6 +385,8 @@ impl PopupMenu {
             scrollable: false,
             scroll_handle: ScrollHandle::default(),
             background: None,
+            native: None,
+            submenu_item_bounds: Vec::new(),
             external_link_icon: true,
             size: Size::default(),
             submenu_anchor: (Anchor::TopLeft, Pixels::ZERO),
@@ -932,7 +969,20 @@ impl PopupMenu {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(context) = self.resolved_action_context(cx) {
+        let context = self.resolved_action_context(cx);
+        if let Some(native) = self.native.as_ref() {
+            // This window is not on the focus path the action is meant for.
+            let action = action.boxed_clone();
+            _ = native.root_window.update(cx, |_, window, cx| {
+                if let Some(context) = context {
+                    context.focus(window, cx);
+                }
+                window.dispatch_action(action, cx);
+            });
+            return;
+        }
+
+        if let Some(context) = context {
             context.focus(window, cx);
         }
 
@@ -954,8 +1004,21 @@ impl PopupMenu {
         }
     }
 
+    /// Arrow keys onto a submenu item don't open a native submenu: it would
+    /// take the keyboard, and the next arrow key would move inside it.
+    fn hold_submenu_for_keys(&mut self) {
+        if let Some(native) = self.native.as_mut() {
+            native.submenu_held = self.selected_index;
+        }
+    }
+
     fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
+        self.select_up_inner(cx);
+        self.hold_submenu_for_keys();
+    }
+
+    fn select_up_inner(&mut self, cx: &mut Context<Self>) {
         let ix = self.selected_index.unwrap_or(0);
 
         if let Some((prev_ix, _)) = self
@@ -975,6 +1038,11 @@ impl PopupMenu {
 
     fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
+        self.select_down_inner(cx);
+        self.hold_submenu_for_keys();
+    }
+
+    fn select_down_inner(&mut self, cx: &mut Context<Self>) {
         let Some(ix) = self.selected_index else {
             self.set_selected_index(0, cx);
             return;
@@ -994,6 +1062,23 @@ impl PopupMenu {
     }
 
     fn select_left(&mut self, _: &SelectLeft, window: &mut Window, cx: &mut Context<Self>) {
+        // A native submenu: the keyboard goes back to its parent's window
+        // when the parent closes it.
+        if self.native.is_some()
+            && let Some(parent) = self
+                .parent_menu
+                .as_ref()
+                .and_then(|parent| parent.upgrade())
+        {
+            parent.update(cx, |parent, cx| {
+                if let Some(native) = parent.native.as_mut() {
+                    native.submenu_held = parent.selected_index;
+                }
+                cx.notify();
+            });
+            return;
+        }
+
         let handled = if matches!(self.submenu_anchor.0, Anchor::TopLeft | Anchor::BottomLeft) {
             self._unselect_submenu(window, cx)
         } else {
@@ -1037,6 +1122,13 @@ impl PopupMenu {
 
     fn _select_submenu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if let Some(active_submenu) = self.active_submenu() {
+            if let Some(native) = self.native.as_mut() {
+                // Opened in the next sync; its window takes the keyboard.
+                native.submenu_held = None;
+                active_submenu.update(cx, |view, cx| view.set_selected_index(0, cx));
+                cx.notify();
+                return true;
+            }
             // Focus the submenu, so that can be handle the action.
             active_submenu.update(cx, |view, cx| {
                 view.set_selected_index(0, cx);
@@ -1218,12 +1310,18 @@ impl PopupMenu {
     }
 
     #[inline]
-    fn max_width(&self) -> Pixels {
+    pub(super) fn max_width(&self) -> Pixels {
         self.max_width.unwrap_or(px(500.))
     }
 
     /// Calculate the anchor corner and left offset for child submenu
     fn update_submenu_menu_anchor(&mut self, window: &Window) {
+        if self.native.is_some() {
+            // The window is the menu: placement is the platform's, which
+            // flips a submenu that would leave the screen.
+            self.submenu_anchor = (Anchor::TopLeft, Pixels::ZERO);
+            return;
+        }
         let bounds = self.bounds;
         let max_width = self.max_width();
         let (anchor, left) = if max_width + bounds.origin.x > window.bounds().size.width {
@@ -1285,6 +1383,11 @@ impl PopupMenu {
                         })
                     {
                         this.focus_handle.focus(window, cx);
+                    }
+                    if this.selected_index != Some(ix)
+                        && let Some(native) = this.native.as_mut()
+                    {
+                        native.submenu_held = None;
                     }
                     this.selected_index = Some(ix);
                 } else if !is_submenu
@@ -1434,7 +1537,16 @@ impl PopupMenu {
                                 ),
                         ),
                 )
-                .when(selected, |this| {
+                .when(self.native.is_some(), |this| {
+                    let view = cx.entity().downgrade();
+                    this.child(bounds_probe(move |bounds, _, cx| {
+                        _ = view.update(cx, |menu, _| {
+                            menu.submenu_item_bounds.retain(|(item, _)| *item != ix);
+                            menu.submenu_item_bounds.push((ix, bounds));
+                        });
+                    }))
+                })
+                .when(selected && self.native.is_none(), |this| {
                     this.child({
                         let (anchor, left) = self.submenu_anchor;
                         let is_bottom_pos =
@@ -1461,6 +1573,123 @@ impl PopupMenu {
     }
 }
 
+/// Native submenus: a submenu shown in a window of its own when this menu is.
+impl PopupMenu {
+    /// The submenu item whose submenu should be open now.
+    fn wanted_native_submenu(&self) -> Option<usize> {
+        let native = self.native.as_ref()?;
+        let ix = self.selected_index?;
+        if native.submenu_held == Some(ix) {
+            return None;
+        }
+        matches!(self.menu_items.get(ix), Some(PopupMenuItem::Submenu { .. })).then_some(ix)
+    }
+
+    fn native_submenu_out_of_date(&self) -> bool {
+        self.native.as_ref().is_some_and(|native| {
+            native.submenu.as_ref().map(|(ix, _)| *ix) != self.wanted_native_submenu()
+        })
+    }
+
+    fn sync_native_submenu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.native_submenu_out_of_date() {
+            return;
+        }
+        self.close_native_submenus(cx);
+
+        let Some(ix) = self.wanted_native_submenu() else {
+            return;
+        };
+        let Some(PopupMenuItem::Submenu { menu, .. }) = self.menu_items.get(ix) else {
+            return;
+        };
+        let Some(anchor_rect) = self
+            .submenu_item_bounds
+            .iter()
+            .find_map(|(item, bounds)| (*item == ix).then_some(*bounds))
+        else {
+            return;
+        };
+        let Some(root_window) = self.native.as_ref().map(|native| native.root_window) else {
+            return;
+        };
+        let menu = menu.clone();
+        let background = self.background;
+        menu.update(cx, |menu, cx| {
+            menu.native = Some(NativeMenuState::new(root_window));
+            menu.set_background(background, cx);
+        });
+        let placement = NativeMenuPlacement {
+            anchor_rect,
+            anchor: PopupAnchor::TopRight,
+            gravity: PopupGravity::BottomRight,
+            constraint_adjustment: PopupConstraintAdjustment::FLIP_X
+                | PopupConstraintAdjustment::SLIDE_X
+                | PopupConstraintAdjustment::SLIDE_Y,
+            // Its first item level with this one: the menu's padding.
+            offset: Point::new(px(4.), px(-4.)),
+        };
+        let parent = cx.entity().downgrade();
+        let opened = open_native_menu(
+            window.window_handle(),
+            placement,
+            menu,
+            self.background,
+            None,
+            move |closed, cx| {
+                // Closed by the platform (a grab declined, a click in another
+                // application): hold it closed, or the next frame reopens it.
+                _ = parent.update(cx, |menu, cx| {
+                    let Some(native) = menu.native.as_mut() else {
+                        return;
+                    };
+                    if native
+                        .submenu
+                        .as_ref()
+                        .is_some_and(|(_, handle)| handle.window_id() == closed)
+                    {
+                        native.submenu_held = native.submenu.take().map(|(ix, _)| ix);
+                        cx.notify();
+                    }
+                });
+            },
+            cx,
+        );
+        match opened {
+            Ok(handle) => {
+                if let Some(native) = self.native.as_mut() {
+                    native.submenu = Some((ix, handle));
+                }
+            }
+            Err(_) => {
+                if let Some(native) = self.native.as_mut() {
+                    native.submenu_held = Some(ix);
+                }
+            }
+        }
+    }
+
+    /// Close the open native submenu, its own submenus first: a popup with a
+    /// child popup open can't be closed.
+    pub(super) fn close_native_submenus(&mut self, cx: &mut Context<Self>) {
+        let Some((ix, handle)) = self
+            .native
+            .as_mut()
+            .and_then(|native| native.submenu.take())
+        else {
+            return;
+        };
+        if let Some(PopupMenuItem::Submenu { menu, .. }) = self.menu_items.get(ix) {
+            menu.update(cx, |menu, cx| {
+                menu.close_native_submenus(cx);
+                menu.native = None;
+                menu.selected_index = None;
+            });
+        }
+        close_native_menu(handle, cx);
+    }
+}
+
 impl FluentBuilder for PopupMenu {}
 impl EventEmitter<DismissEvent> for PopupMenu {}
 impl Focusable for PopupMenu {
@@ -1479,6 +1708,12 @@ struct RenderOptions {
 impl Render for PopupMenu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_submenu_menu_anchor(window);
+        if self.native_submenu_out_of_date() {
+            // Windows open and close outside of any window's draw.
+            cx.defer_in(window, |menu, window, cx| {
+                menu.sync_native_submenu(window, cx)
+            });
+        }
 
         // Submenus attached via the public `item()` + `PopupMenuItem::submenu()`
         // path (from contexts that only have the menu value, e.g. a table

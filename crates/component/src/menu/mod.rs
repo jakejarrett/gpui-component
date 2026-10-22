@@ -4,6 +4,7 @@ mod app_menu_bar;
 mod context_menu;
 mod dropdown_menu;
 mod menu_item;
+mod native_popup;
 mod popup_menu;
 
 pub use app_menu_bar::AppMenuBar;
