@@ -14,6 +14,7 @@ pub(crate) struct MenuItemElement {
     style: StyleRefinement,
     disabled: bool,
     selected: bool,
+    hover_highlight: bool,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     on_hover: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
     children: SmallVec<[AnyElement; 2]>,
@@ -29,6 +30,7 @@ impl MenuItemElement {
             style: StyleRefinement::default(),
             disabled: false,
             selected: false,
+            hover_highlight: true,
             on_click: None,
             on_hover: None,
             children: SmallVec::new(),
@@ -38,6 +40,12 @@ impl MenuItemElement {
     /// Set ListItem as the selected item style.
     pub(crate) fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Whether the item lights up under the pointer.
+    pub(crate) fn hover_highlight(mut self, highlight: bool) -> Self {
+        self.hover_highlight = highlight;
         self
     }
 
@@ -113,9 +121,11 @@ impl RenderOnce for MenuItemElement {
                 // Not `group_hover` on the item's own group: GPUI styles an
                 // element before registering its group, and that fallback keeps
                 // the pointer's item lit after a key moves the highlight away.
-                this.hover(|this| {
-                    this.bg(cx.theme().tokens.accent)
-                        .text_color(cx.theme().accent_foreground)
+                this.when(self.hover_highlight, |this| {
+                    this.hover(|this| {
+                        this.bg(cx.theme().tokens.accent)
+                            .text_color(cx.theme().accent_foreground)
+                    })
                 })
                 .when(self.selected, |this| {
                     this.bg(cx.theme().tokens.accent)

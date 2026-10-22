@@ -179,6 +179,8 @@ pub(crate) fn open_native_menu(
     };
     cx.open_window(options, move |window, cx| {
         menu.read(cx).focus_handle(cx).focus(window, cx);
+        let pointer = window.mouse_position();
+        menu.update(cx, |menu, _| menu.set_opening_pointer(pointer));
         let host = cx.new(|_| NativeMenuHost {
             menu,
             on_side_key,

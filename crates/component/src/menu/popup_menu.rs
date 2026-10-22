@@ -297,6 +297,9 @@ pub(super) struct NativeMenuState {
     /// reached by arrow keys, which would otherwise be pulled into it, or
     /// left with the left arrow.
     submenu_held: Option<usize>,
+    /// The pointer position the window opened with: the parent window's,
+    /// not a place in this one. Hover means nothing until the pointer moves.
+    opening_pointer: Option<Point<Pixels>>,
 }
 
 impl NativeMenuState {
@@ -305,6 +308,41 @@ impl NativeMenuState {
             root_window,
             submenu: None,
             submenu_held: None,
+            opening_pointer: None,
+        }
+    }
+}
+
+impl PopupMenu {
+    /// Note the pointer position the menu's native window opened with.
+    pub(super) fn set_opening_pointer(&mut self, position: Point<Pixels>) {
+        if let Some(native) = self.native.as_mut() {
+            native.opening_pointer = Some(position);
+        }
+    }
+
+    /// Whether the pointer is still where the native window opened with it,
+    /// without forgetting that position once it has moved.
+    fn pointer_still_opening(&self, window: &Window) -> bool {
+        self.native
+            .as_ref()
+            .and_then(|native| native.opening_pointer)
+            .is_some_and(|position| position == window.mouse_position())
+    }
+
+    /// Whether the pointer is still where the native window opened with it,
+    /// a position carried over from the parent window.
+    fn pointer_not_moved_yet(&mut self, window: &Window) -> bool {
+        let Some(native) = self.native.as_mut() else {
+            return false;
+        };
+        match native.opening_pointer {
+            Some(position) if position == window.mouse_position() => true,
+            Some(_) => {
+                native.opening_pointer = None;
+                false
+            }
+            None => false,
         }
     }
 }
@@ -1365,7 +1403,11 @@ impl PopupMenu {
             _ => (px(26.), options.radius),
         };
 
+        // The window's first pointer position is the parent window's: lighting
+        // the item under it would highlight one nobody pointed at.
+        let pointer_settled = !self.pointer_still_opening(window);
         let this = MenuItemElement::new(ix)
+            .hover_highlight(pointer_settled)
             .relative()
             .text_sm()
             .py_0()
@@ -1374,6 +1416,9 @@ impl PopupMenu {
             .items_center()
             .selected(selected)
             .on_hover(cx.listener(move |this, hovered, window, cx| {
+                if this.pointer_not_moved_yet(window) {
+                    return;
+                }
                 if *hovered {
                     // Pointing elsewhere closes the open submenu; take back
                     // the focus the keyboard may have moved into it.
