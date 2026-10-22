@@ -11,7 +11,7 @@ use gpui::{
     ParentElement, Pixels, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement,
     Styled, WeakEntity, Window, anchored, deferred, div, prelude::FluentBuilder, px, rems,
 };
-use gpui::{ClickEvent, Half, MouseDownEvent, OwnedMenuItem, Point, Subscription};
+use gpui::{ClickEvent, Half, Hsla, MouseDownEvent, OwnedMenuItem, Point, Subscription};
 use gpui_base::TestSupportExt as _;
 
 use std::rc::Rc;
@@ -306,6 +306,8 @@ pub struct PopupMenu {
     scrollable: bool,
     external_link_icon: bool,
     scroll_handle: ScrollHandle,
+    /// Fill in place of the theme's `popover`, submenus included.
+    background: Option<Hsla>,
     // This will update on render
     submenu_anchor: (Anchor, Pixels),
 
@@ -347,6 +349,7 @@ impl PopupMenu {
             bounds: Bounds::default(),
             scrollable: false,
             scroll_handle: ScrollHandle::default(),
+            background: None,
             external_link_icon: true,
             size: Size::default(),
             submenu_anchor: (Anchor::TopLeft, Pixels::ZERO),
@@ -386,6 +389,28 @@ impl PopupMenu {
             if let PopupMenuItem::Submenu { menu, .. } = item {
                 menu.update(cx, |menu, cx| {
                     menu.set_action_context(action_context.clone(), cx);
+                });
+            }
+        }
+    }
+
+    /// Fill the menu, and its submenus, with `color` instead of the theme's
+    /// `popover`.
+    pub fn background(mut self, color: impl Into<Hsla>) -> Self {
+        self.background = Some(color.into());
+        self
+    }
+
+    pub(crate) fn set_background(&mut self, background: Option<Hsla>, cx: &mut Context<Self>) {
+        if self.background != background {
+            self.background = background;
+            cx.notify();
+        }
+
+        for item in &self.menu_items {
+            if let PopupMenuItem::Submenu { menu, .. } = item {
+                menu.update(cx, |menu, cx| {
+                    menu.set_background(background, cx);
                 });
             }
         }
@@ -1507,6 +1532,7 @@ impl Render for PopupMenu {
             .on_action(cx.listener(Self::dismiss))
             .on_mouse_down_out(cx.listener(Self::on_mouse_down_out))
             .popover_style(cx)
+            .when_some(self.background, |this, background| this.bg(background))
             .text_color(cx.theme().popover_foreground)
             .relative()
             .occlude()

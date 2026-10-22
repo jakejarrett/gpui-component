@@ -8,7 +8,7 @@ use crate::{
     scroll::ScrollableMask,
 };
 use gpui::{
-    App, AppContext as _, ClickEvent, Context, DismissEvent, Entity, FocusHandle, Focusable,
+    App, AppContext as _, ClickEvent, Context, DismissEvent, Entity, FocusHandle, Focusable, Hsla,
     InteractiveElement as _, IntoElement, KeyBinding, MouseButton, OwnedMenu, ParentElement,
     Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Subscription,
     Window, anchored, deferred, div, prelude::FluentBuilder, px,
@@ -29,6 +29,7 @@ pub struct AppMenuBar {
     selected_index: Option<usize>,
     action_context: Option<FocusHandle>,
     scroll_handle: ScrollHandle,
+    menu_background: Option<Hsla>,
 }
 
 impl AppMenuBar {
@@ -40,6 +41,7 @@ impl AppMenuBar {
                 action_context: None,
                 menus: Vec::new(),
                 scroll_handle: ScrollHandle::new(),
+                menu_background: None,
             };
             this.reload(cx);
             this
@@ -61,6 +63,19 @@ impl AppMenuBar {
             .collect();
         self.selected_index = None;
         self.action_context = None;
+        cx.notify();
+    }
+
+    /// Fill the menus the bar opens with `background` instead of the theme's
+    /// `popover`; `None` goes back to the theme.
+    pub fn set_menu_background(&mut self, background: Option<Hsla>, cx: &mut Context<Self>) {
+        if self.menu_background == background {
+            return;
+        }
+        self.menu_background = background;
+        for menu in &self.menus {
+            menu.update(cx, |_, cx| cx.notify());
+        }
         cx.notify();
     }
 
@@ -182,7 +197,9 @@ impl AppMenu {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<PopupMenu> {
-        let action_context = self.menu_bar.read(cx).action_context.clone();
+        let menu_bar = self.menu_bar.read(cx);
+        let action_context = menu_bar.action_context.clone();
+        let background = menu_bar.menu_background;
         let popup_menu = match self.popup_menu.as_ref() {
             None => {
                 let items = self.menu.items.clone();
@@ -191,6 +208,7 @@ impl AppMenu {
                 });
                 popup_menu.update(cx, |menu, cx| {
                     menu.set_action_context(action_context.clone(), cx);
+                    menu.set_background(background, cx);
                 });
                 self._subscription =
                     Some(cx.subscribe_in(&popup_menu, window, Self::handle_dismiss));
@@ -201,6 +219,7 @@ impl AppMenu {
             Some(menu) => {
                 menu.update(cx, |menu, cx| {
                     menu.set_action_context(action_context.clone(), cx);
+                    menu.set_background(background, cx);
                 });
                 menu.clone()
             }
@@ -343,6 +362,7 @@ mod tests {
                     selected_index: None,
                     action_context: None,
                     scroll_handle: ScrollHandle::new(),
+                    menu_background: None,
                 }),
                 first_focus,
                 second_focus,
