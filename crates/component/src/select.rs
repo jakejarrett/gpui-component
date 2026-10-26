@@ -1,8 +1,8 @@
 use gpui::{
     AnyElement, App, ClickEvent, Context, DismissEvent, Edges, ElementId, Entity, EventEmitter,
-    FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, Length, ParentElement, Render,
-    RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window,
-    deferred, div, prelude::FluentBuilder, px, rems,
+    FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, Length, MouseButton,
+    MouseDownEvent, ParentElement, Render, RenderOnce, SharedString, StatefulInteractiveElement,
+    StyleRefinement, Styled, Window, deferred, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_base::TestSupportExt as _;
 use rust_i18n::t;
@@ -406,7 +406,9 @@ where
     }
 
     fn on_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.state.list.read(cx).is_focused(window, cx)
+        // The list's own window has the keyboard while it is open there.
+        if self.state.native.is_some()
+            || self.state.list.read(cx).is_focused(window, cx)
             || self.state.focus_handle.is_focused(window)
         {
             return;
@@ -419,15 +421,67 @@ where
 
     fn toggle_menu(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
+        self.toggle(window, cx);
+    }
 
+    /// Lists that open in a window of their own open on the press: a
+    /// platform popup only takes the keyboard from the press that opens it.
+    fn press_trigger(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        self.toggle(window, cx);
+    }
+
+    fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_open(!self.state.open, cx);
 
         if self.state.open {
-            self.state.list.focus_handle(cx).focus(window, cx);
+            if !self.open_natively(window, cx) {
+                self.state.list.focus_handle(cx).focus(window, cx);
+            }
         } else {
             self.clear_query_and_restore_cursor(window, cx);
         }
 
+        cx.notify();
+    }
+
+    /// Open the list in a window of its own; false where it is drawn in this
+    /// window instead.
+    fn open_natively(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let weak = cx.entity().downgrade();
+        let handle = crate::native_dropdown::open_native_list(
+            &self.state.list,
+            self.state.search_placeholder.clone(),
+            self.state.size,
+            self.state.menu_width,
+            self.state.menu_max_h,
+            self.state.scroll_bounce,
+            self.state.bounds,
+            // Gone without being closed from here: dismissed by a click in
+            // another application.
+            move |cx| {
+                cx.defer(move |cx| {
+                    _ = weak.update(cx, |this, cx| {
+                        if this.state.native.take().is_some() {
+                            this.set_open(false, cx);
+                        }
+                    });
+                });
+            },
+            window,
+            cx,
+        );
+        self.state.native = handle;
+        self.state.native.is_some()
+    }
+
+    /// A press elsewhere in this window while the list is open in its own.
+    fn press_outside(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.native.is_none() {
+            return;
+        }
+        self.clear_query_and_restore_cursor(window, cx);
+        self.set_open(false, cx);
         cx.notify();
     }
 
@@ -459,6 +513,9 @@ where
     }
 
     fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if !open && let Some(handle) = self.state.native.take() {
+            cx.defer(move |cx| crate::native_dropdown::close_native_dropdown(handle, cx));
+        }
         let dismissed = self.state.open && !open;
         self.state.open = open;
         self.state.deferred_context = open.then(|| GlobalState::register_deferred_popover(cx));
@@ -542,6 +599,9 @@ where
         let show_clean = self.state.cleanable && self.selected_index(cx).is_some();
         let bounds = self.state.bounds;
         let allow_open = !(self.state.open || self.state.disabled);
+        // Opened, or to be opened, in a window of its own.
+        let native =
+            self.state.native.is_some() || crate::native_dropdown::wants_native_dropdowns(cx);
         let outline_visible = self.state.open || (is_focused && !self.state.disabled);
 
         let (bg, fg) = input_style(self.state.disabled, cx);
@@ -585,8 +645,21 @@ where
                             outline_visible && self.state.appearance && self.focus_ring_enabled,
                             |this| this.focus_ring_style(window, cx),
                         )
-                        .when(allow_open, |this| {
-                            this.on_click(cx.listener(Self::toggle_menu))
+                        .map(|this| {
+                            if native {
+                                // Pressed again while open, it closes.
+                                this.when(!self.state.disabled, |this| {
+                                    this.on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(Self::press_trigger),
+                                    )
+                                    .on_mouse_down_out(cx.listener(Self::press_outside))
+                                })
+                            } else {
+                                this.when(allow_open, |this| {
+                                    this.on_click(cx.listener(Self::toggle_menu))
+                                })
+                            }
                         })
                         .child(
                             h_flex()
@@ -632,7 +705,7 @@ where
                                 }),
                         ),
                 )
-                .when(self.state.open, |this| {
+                .when(self.state.open && self.state.native.is_none(), |this| {
                     this.child(
                         deferred(crate::popover::dropdown_popup(
                             ("select-popup", cx.entity_id()),
@@ -644,6 +717,10 @@ where
                                     Length::Definite(w) => this.w(w),
                                 })
                                 .popover_style(cx)
+                                .when_some(
+                                    crate::native_dropdown::dropdown_background(false, cx),
+                                    |this, background| this.bg(background),
+                                )
                                 .child(
                                     List::new(&self.state.list)
                                         .when_some(

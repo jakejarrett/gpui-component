@@ -61,6 +61,7 @@ pub mod marker;
 pub mod menu;
 pub mod message;
 pub mod message_scroller;
+mod native_dropdown;
 pub mod native_menu;
 pub mod notification;
 pub mod pagination;
@@ -110,6 +111,7 @@ pub use index_path::IndexPath;
 pub use input::{Rope, RopeExt, RopeLines};
 #[cfg(any(feature = "inspector", debug_assertions))]
 pub use inspector::*;
+pub use native_dropdown::set_dropdown_background;
 pub use resizable::{
     ResizablePanel, ResizablePanelEvent, ResizablePanelGroup, ResizableState, h_resizable,
     resizable_panel, resize_handle, resize_handle_appearance, v_resizable,

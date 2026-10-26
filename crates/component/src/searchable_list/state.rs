@@ -22,6 +22,8 @@ where
     pub(crate) list: Entity<ListState<SearchableListAdapter<D>>>,
     pub(crate) selection: Vec<(IndexPath, D::Item)>,
     pub(crate) open: bool,
+    /// The list's window of its own, while it is open in one.
+    pub(crate) native: Option<gpui::WindowHandle<crate::native_dropdown::NativeDropdownHost>>,
     /// Held while the popup is open, so that a component dropped without
     /// closing it first takes its registration with it.
     pub(crate) deferred_context: Option<DeferredPopover>,
@@ -114,6 +116,7 @@ where
             list,
             selection,
             open: false,
+            native: None,
             deferred_context: None,
             bounds: Bounds::default(),
             size: Size::default(),

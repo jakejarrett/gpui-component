@@ -1,7 +1,7 @@
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, DismissEvent, Edges, ElementId, Entity,
     EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, Length,
-    MouseDownEvent, ParentElement, Pixels, Render, RenderOnce, SharedString,
+    MouseButton, MouseDownEvent, ParentElement, Pixels, Render, RenderOnce, SharedString,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, deferred, div,
     prelude::FluentBuilder, px, rems,
 };
@@ -490,7 +490,9 @@ where
     }
 
     fn on_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.state.list.read(cx).is_focused(window, cx)
+        // The list's own window has the keyboard while it is open there.
+        if self.state.native.is_some()
+            || self.state.list.read(cx).is_focused(window, cx)
             || self.state.focus_handle.is_focused(window)
         {
             return;
@@ -502,11 +504,67 @@ where
 
     fn toggle_menu(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
+        self.toggle(window, cx);
+    }
 
+    /// Lists that open in a window of their own open on the press: a
+    /// platform popup only takes the keyboard from the press that opens it.
+    fn press_trigger(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        self.toggle(window, cx);
+    }
+
+    /// A press elsewhere in this window while the list is open in its own.
+    fn press_outside(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.state.native.is_none() {
+            return;
+        }
+        cx.emit(ComboboxEvent::Confirm(self.selected_values()));
+        self.set_open(false, cx);
+        cx.notify();
+    }
+
+    /// Open the list in a window of its own; false where it is drawn in this
+    /// window instead (always, with a footer).
+    fn open_natively(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.footer.is_some() {
+            return false;
+        }
+        let weak = cx.entity().downgrade();
+        let handle = crate::native_dropdown::open_native_list(
+            &self.state.list,
+            self.state.search_placeholder.clone(),
+            self.state.size,
+            self.state.menu_width,
+            self.state.menu_max_h,
+            None,
+            self.state.bounds,
+            // Gone without being closed from here: dismissed by a click in
+            // another application.
+            move |cx| {
+                cx.defer(move |cx| {
+                    _ = weak.update(cx, |this, cx| {
+                        if this.state.native.take().is_some() {
+                            cx.emit(ComboboxEvent::Confirm(this.selected_values()));
+                            this.set_open(false, cx);
+                        }
+                    });
+                });
+            },
+            window,
+            cx,
+        );
+        self.state.native = handle;
+        self.state.native.is_some()
+    }
+
+    fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_open(!self.state.open, cx);
 
         if self.state.open {
-            self.state.list.focus_handle(cx).focus(window, cx);
+            if !self.open_natively(window, cx) {
+                self.state.list.focus_handle(cx).focus(window, cx);
+            }
         } else {
             cx.emit(ComboboxEvent::Confirm(self.selected_values()));
             self.focus(window, cx);
@@ -534,6 +592,9 @@ where
     }
 
     fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if !open && let Some(handle) = self.state.native.take() {
+            cx.defer(move |cx| crate::native_dropdown::close_native_dropdown(handle, cx));
+        }
         self.state.open = open;
         self.state.deferred_context = open.then(|| GlobalState::register_deferred_popover(cx));
 
@@ -657,12 +718,22 @@ where
                 .into_any_element()
         };
 
+        // Opened, or to be opened, in a window of its own.
+        let native = self.state.native.is_some()
+            || (self.footer.is_none() && crate::native_dropdown::wants_native_dropdowns(cx));
         let toggle_handler: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>> =
-            if allow_open {
+            if allow_open && !native {
                 Some(Box::new(cx.listener(Self::toggle_menu)))
             } else {
                 None
             };
+        let press_handlers: Option<(PressHandler, PressHandler)> =
+            (allow_open && native).then(|| -> (PressHandler, PressHandler) {
+                (
+                    Box::new(cx.listener(Self::press_trigger)),
+                    Box::new(cx.listener(Self::press_outside)),
+                )
+            });
 
         let footer_el = self.footer.as_ref().map(|f| f(window, cx));
 
@@ -689,10 +760,11 @@ where
                     trigger_body,
                     trailing,
                     toggle_handler,
+                    press_handlers,
                     window,
                     cx,
                 ))
-                .when(self.state.open, |this| {
+                .when(self.state.open && self.state.native.is_none(), |this| {
                     this.child(
                         deferred(render_popup_shell(
                             ("combobox-popup", cx.entity_id()),
@@ -960,6 +1032,8 @@ where
 
 // MARK: Rendering helpers
 
+type PressHandler = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>;
+
 /// Renders the styled trigger container.
 #[allow(clippy::too_many_arguments)]
 fn render_trigger_container(
@@ -975,6 +1049,9 @@ fn render_trigger_container(
     trigger_body: AnyElement,
     trailing: AnyElement,
     toggle_handler: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
+    // The press that opens or closes a list in a window of its own, and a
+    // press elsewhere in this window, which closes it.
+    press_handlers: Option<(PressHandler, PressHandler)>,
     window: &Window,
     cx: &mut App,
 ) -> impl IntoElement {
@@ -1005,6 +1082,10 @@ fn render_trigger_container(
         )
         .when(allow_open, |this| {
             this.when_some(toggle_handler, |this, handler| this.on_click(handler))
+        })
+        .when_some(press_handlers, |this, (press, outside)| {
+            this.on_mouse_down(MouseButton::Left, press)
+                .on_mouse_down_out(outside)
         })
         .child(
             h_flex()
@@ -1054,6 +1135,10 @@ fn render_popup_shell<D: SearchableListDelegate + 'static>(
                 Length::Definite(w) => this.w(w),
             })
             .popover_style(cx)
+            .when_some(
+                crate::native_dropdown::dropdown_background(false, cx),
+                |this, background| this.bg(background),
+            )
             .child(
                 List::new(list)
                     .when_some(search_placeholder, |this, placeholder| {
